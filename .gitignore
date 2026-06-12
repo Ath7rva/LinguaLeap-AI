@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.env.*
+!.env.example
+*.db
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Deployment metadata
+.vercel/
+
+# Logs and document QA output
+*.log
+.doc_qa_tools/
+docs/report_assets/
+docs/report_render/
+
+# OS
+.DS_Store
+Thumbs.db
