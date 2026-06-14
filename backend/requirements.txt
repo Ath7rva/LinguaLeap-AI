@@ -13,4 +13,4 @@ psycopg[binary]==3.3.2
 pytest==9.1.0
 alembic==1.15.2
 redis==5.2.1
-sentry-sdk[fastapi]==2.19.2
+sentry-sdk[fastapi]==2.62.0
