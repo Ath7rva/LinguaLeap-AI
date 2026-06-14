@@ -12,7 +12,10 @@ from app.core.config import get_settings
 from app.services.cache import get_json, set_json
 
 settings = get_settings()
-client = OpenAI(api_key=settings.groq_api_key, base_url="https://api.groq.com/openai/v1")
+client = OpenAI(
+    api_key=settings.groq_api_key or "provider-key-not-configured",
+    base_url="https://api.groq.com/openai/v1",
+)
 
 CHAT_MODEL = "llama-3.3-70b-versatile"
 STT_MODEL = "whisper-large-v3-turbo"
