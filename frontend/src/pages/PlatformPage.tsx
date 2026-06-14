@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowRight, BarChart3, BookOpen, Check, Download, Flame, Gauge, Home, Languages,
-  Loader2, LogOut, MessageCircle, Mic, Send, ShieldCheck, Sparkles, Square, Target, Trophy, UserRound, Volume2,
+  AlertTriangle, ArrowRight, BarChart3, BookOpen, Check, Download, Flame, FlaskConical, Gauge, Headphones, Home, Languages,
+  Loader2, LogOut, MessageCircle, Mic, RefreshCw, Send, ShieldCheck, Sparkles, Square, Target, Trophy, UserPlus, UserRound, Volume2, WandSparkles,
 } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import {
   completeLesson, deleteAccount, exportAccount, fetchAnalytics, fetchBootstrap, fetchCurriculum, fetchExercises,
-  fetchLesson, fetchResearch, fetchReviews, researchExportUrl, selectLanguage, sendTutorMessage,
-  scorePronunciation, submitAssessment, submitExercise, submitReview, translateText, updateConsent,
+  activateExperiment, createExperiment, createPracticeJob, fetchExperiments, fetchJob, fetchLearningPath, fetchLesson, fetchSessions,
+  fetchListening, fetchProviderUsage, fetchResearch, fetchResearchQuality, fetchReviews, inviteResearcher, logoutAll,
+  researchExportUrl, selectLanguage, sendTutorMessage, scorePronunciation, submitAssessment, submitExercise,
+  submitGeneratedExercise, submitListening, submitPlacement, submitReview, translateText, updateConsent,
 } from '../lib/api'
 import { useAuthStore } from '../store/auth'
 import { ChatMessage, CurriculumLevel, DashboardData, Exercise, Language, Lesson, ReviewItem } from '../types'
@@ -89,7 +91,7 @@ export default function PlatformPage() {
           </div>
         </header>
 
-        {section === 'dashboard' && <Dashboard dashboard={dashboard} onNavigate={(target) => navigate(`/app/${target}`)} />}
+        {section === 'dashboard' && <Dashboard dashboard={dashboard} onNavigate={(target) => navigate(`/app/${target}`)} onRefresh={refresh} />}
         {section === 'languages' && <LanguagePage languages={languages} current={selectedLanguage.code} onSelect={chooseLanguage} />}
         {section === 'learn' && <LearnPage onComplete={async (id, seconds) => { await completeLesson(id, seconds); await refresh() }} />}
         {section === 'practice' && <PracticePage language={selectedLanguage} onProgress={refresh} />}
@@ -100,7 +102,17 @@ export default function PlatformPage() {
   )
 }
 
-function Dashboard({ dashboard, onNavigate }: { dashboard: DashboardData; onNavigate: (target: string) => void }) {
+function Dashboard({ dashboard, onNavigate, onRefresh }: { dashboard: DashboardData; onNavigate: (target: string) => void; onRefresh: () => Promise<void> }) {
+  const { user, token, setAuth } = useAuthStore()
+  const [placing, setPlacing] = useState(false)
+  const [placement, setPlacement] = useState<Record<string, string>>({})
+  const finishPlacement = async () => {
+    setPlacing(true)
+    const result = await submitPlacement(placement)
+    if (user && token) setAuth({ ...user, placement_score: result.score, cefr_level: result.cefr_level }, token)
+    await onRefresh()
+    setPlacing(false)
+  }
   const cards = [
     ['TOTAL XP', dashboard.metrics.total_interactions ? `${dashboard.metrics.total_interactions} sessions` : 'Start your first session', dashboard.metrics.completed_lessons, Trophy],
     ['DAILY STREAK', 'Consistency fuels retention.', dashboard.language.name, Flame],
@@ -124,6 +136,23 @@ function Dashboard({ dashboard, onNavigate }: { dashboard: DashboardData; onNavi
         </article>
         <article className="challenge-card"><span>GAMIFIED MOMENTUM</span><h2>Daily Challenge</h2><div><h3>{dashboard.challenge.title}</h3><p>{dashboard.challenge.description}</p><strong>REWARD<br /><b>+{dashboard.challenge.reward}</b> XP</strong><button onClick={() => onNavigate('practice')}>Start challenge <ArrowRight /></button></div></article>
       </div>
+      <article className="content-card adaptive-card">
+        <span>EXPLAINABLE ADAPTIVE PATH</span>
+        <h2>{dashboard.adaptive_recommendation.action.title}</h2>
+        <p>{dashboard.adaptive_recommendation.reason}</p>
+        <div className="mastery-grid">{dashboard.mastery.map((item) => <div key={item.skill}><span>{item.skill}</span><i><b style={{ width: `${item.mastery}%` }} /></i><strong>{item.mastery}%</strong></div>)}</div>
+        <button onClick={() => onNavigate(dashboard.adaptive_recommendation.action.type === 'lesson' ? 'learn' : 'practice')}>Follow recommendation <ArrowRight /></button>
+      </article>
+      {user?.placement_score == null ? <article className="content-card placement-card">
+        <span>CEFR PLACEMENT</span><h2>Find your starting point</h2><p>This short product check places you at A1, A2, or B1. It is not an accredited CEFR examination.</p>
+        {[
+          ['meaning', 'Can you identify a basic greeting?', ['hello', 'later', 'unknown']],
+          ['order', 'Can you recognize a correct beginner sentence pattern?', ['correct', 'unsure']],
+          ['listen', 'How much of a short greeting do you understand?', ['understood', 'partly', 'not-yet']],
+          ['write', 'Can you write one complete introductory sentence?', ['complete', 'partial', 'not-yet']],
+        ].map(([id, prompt, options]: any) => <label key={id}>{prompt}<select value={placement[id] || ''} onChange={(event) => setPlacement({ ...placement, [id]: event.target.value })}><option value="">Choose</option>{options.map((option: string) => <option key={option}>{option}</option>)}</select></label>)}
+        <button disabled={placing || Object.keys(placement).length < 4} onClick={finishPlacement}>{placing ? <Loader2 className="spin" /> : <Target />} Calculate placement</button>
+      </article> : null}
     </div>
   )
 }
@@ -220,6 +249,10 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
   const [translating, setTranslating] = useState(false)
   const [pronunciationTarget, setPronunciationTarget] = useState('')
   const [pronunciation, setPronunciation] = useState<any>(null)
+  const [listening, setListening] = useState<any[]>([])
+  const [listeningState, setListeningState] = useState<Record<string, any>>({})
+  const [generated, setGenerated] = useState<any[]>([])
+  const [generating, setGenerating] = useState(false)
   const [recording, setRecording] = useState(false)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const lastActionAt = useRef(Date.now())
@@ -232,6 +265,7 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
   useEffect(() => { fetchExercises().then((data) => setExercises(data.exercises)) }, [language.code])
   const loadReviews = () => fetchReviews().then(setReviews)
   useEffect(() => { void loadReviews() }, [language.code])
+  useEffect(() => { fetchListening().then((data) => setListening(data.exercises)) }, [language.code])
   const send = async () => {
     if (!input.trim() || sending) return
     const text = input.trim(); setInput(''); setMessages((items) => [...items, { role: 'user', content: text }]); setSending(true)
@@ -292,6 +326,42 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
     utterance.lang = language.code === 'hi' ? 'hi-IN' : language.code === 'ja' ? 'ja-JP' : 'de-DE'
     window.speechSynthesis.speak(utterance)
   }
+  const playListening = (exercise: any, slow = false) => {
+    const state = listeningState[exercise.id] || { plays: 0, revealed: false, answer: '' }
+    setListeningState({ ...listeningState, [exercise.id]: { ...state, plays: state.plays + 1 } })
+    const audio = new Audio(exercise.audio_url)
+    audio.playbackRate = slow ? 0.72 : 1
+    void audio.play()
+  }
+  const checkListening = async (exercise: any, answer: string) => {
+    const state = listeningState[exercise.id] || { plays: 1, revealed: false }
+    const result = await submitListening({ exercise_id: exercise.id, answer, playback_count: state.plays || 1, transcript_revealed: !!state.revealed })
+    setListeningState({ ...listeningState, [exercise.id]: { ...state, answer, result } })
+    await onProgress()
+  }
+  const generatePractice = async () => {
+    setGenerating(true)
+    try {
+      const created = await createPracticeJob(crypto.randomUUID())
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        const job = await fetchJob(created.job_id)
+        if (job.status === 'completed') {
+          setGenerated(job.result.exercises)
+          return
+        }
+        if (job.status === 'failed') throw new Error(job.error || 'Generation failed')
+      }
+      throw new Error('Practice generation is taking longer than expected.')
+    } finally {
+      setGenerating(false)
+    }
+  }
+  const submitGenerated = async (exercise: any, answer: string) => {
+    const result = await submitGeneratedExercise(exercise.id, answer, elapsed())
+    setResults({ ...results, [exercise.id]: result })
+    await onProgress()
+  }
   return (
     <div className="practice-layout">
       <section className="tutor-panel">
@@ -302,6 +372,11 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
         <div className="chat-input"><textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder={`Practice ${language.name} with your tutor.`} /><button onClick={send} disabled={sending || !input.trim()}><Send /></button></div>
       </section>
       <section className="exercise-panel"><span>PRACTICE EXERCISES</span><h2>Lesson and Quiz</h2><p>Structured tasks create comparable evidence alongside open-ended conversation.</p>
+        <button className="generate-practice" onClick={generatePractice} disabled={generating}>{generating ? <Loader2 className="spin" /> : <WandSparkles />} Build practice from my weak skills</button>
+        {generated.map((exercise) => <article key={exercise.id}><span>PERSONALIZED · {exercise.skill}</span><h3>{exercise.prompt}</h3>
+          {exercise.options?.length ? <div className="answer-options">{exercise.options.map((option: string) => <button key={option} disabled={!!results[exercise.id]} onClick={() => submitGenerated(exercise, option)}>{option}</button>)}</div> : <div className="fill-answer"><input value={answers[exercise.id] || ''} onChange={(event) => setAnswers({ ...answers, [exercise.id]: event.target.value })} /><button onClick={() => submitGenerated(exercise, answers[exercise.id] || '')}>Check</button></div>}
+          {results[exercise.id] ? <div className={`exercise-result ${results[exercise.id].correct ? 'correct' : 'incorrect'}`}><strong>{results[exercise.id].correct ? 'Correct' : `Answer: ${results[exercise.id].expected_answer}`}</strong><p>{results[exercise.id].feedback}</p></div> : null}
+        </article>)}
         {exercises.map((exercise) => <article key={exercise.id}><span>{exercise.type === 'mcq' ? 'MCQ' : 'FILL BLANK'}</span><h3>{exercise.prompt}</h3>
           {exercise.options ? <div className="answer-options">{exercise.options.map((option) => <button disabled={!!results[exercise.id]} onClick={() => submit(exercise, option)} key={option}>{option}</button>)}</div> : <div className="fill-answer"><input value={answers[exercise.id] || ''} onChange={(e) => setAnswers({ ...answers, [exercise.id]: e.target.value })} placeholder="Type your answer here" /><button onClick={() => submit(exercise, answers[exercise.id] || '')}>Check</button></div>}
           {results[exercise.id] ? <div className={`exercise-result ${results[exercise.id].correct ? 'correct' : 'incorrect'}`}><strong>{results[exercise.id].correct ? 'Correct' : `Answer: ${results[exercise.id].expected_answer}`}</strong><p>{results[exercise.id].feedback} +{results[exercise.id].xp_awarded} XP</p></div> : null}
@@ -321,7 +396,20 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
           <input value={pronunciationTarget} onChange={(event) => setPronunciationTarget(event.target.value)} placeholder={`Phrase in ${language.name}`} />
           <button onClick={hearTarget} disabled={!pronunciationTarget.trim()}><Volume2 /> Hear model phrase</button>
           <button onClick={toggleRecording} disabled={!pronunciationTarget.trim()}>{recording ? <Square /> : <Mic />} {recording ? 'Stop and score' : 'Start recording'}</button>
-          {pronunciation ? <div className="tool-result">{pronunciation.error ? <p>{pronunciation.error}</p> : <><strong>{pronunciation.score}% match</strong><em>Heard: {pronunciation.transcript}</em><p>{pronunciation.feedback}</p></>}</div> : null}
+          {pronunciation ? <div className="tool-result">{pronunciation.error ? <p>{pronunciation.error}</p> : <><strong>{pronunciation.score}% word match</strong><em>Heard: {pronunciation.transcript}</em><p>{pronunciation.feedback}</p><div className="word-feedback">{pronunciation.word_feedback?.map((word: any, index: number) => <span className={word.status} key={`${word.word}-${index}`}>{word.word}{word.heard ? ` → ${word.heard}` : ''}</span>)}</div><small>{pronunciation.disclaimer}</small></>}</div> : null}
+        </div>
+        <div className="practice-tool listening-tool"><span>LISTENING LAB</span><h2>Listen before revealing</h2><p>Use normal speed first. Slow playback and transcript reveals are recorded so the score reflects the support you used.</p>
+          {listening.map((exercise) => {
+            const state = listeningState[exercise.id] || { plays: 0, revealed: false, answer: '' }
+            return <article key={exercise.id}><span>{exercise.cefr} LISTENING</span><h3>{exercise.question}</h3>
+              <button onClick={() => playListening(exercise)}><Headphones /> Play</button>
+              <button onClick={() => playListening(exercise, true)}><Volume2 /> Slow</button>
+              <button onClick={() => setListeningState({ ...listeningState, [exercise.id]: { ...state, revealed: true } })}>Reveal transcript</button>
+              {state.revealed ? <p><strong>{exercise.text}</strong><br /><em>{exercise.romanization}</em></p> : null}
+              <div className="answer-options">{exercise.options.map((option: string) => <button disabled={!!state.result} onClick={() => checkListening(exercise, option)} key={option}>{option}</button>)}</div>
+              {state.result ? <div className={`exercise-result ${state.result.correct ? 'correct' : 'incorrect'}`}><strong>{state.result.score}%</strong><p>{state.result.feedback}</p></div> : null}
+            </article>
+          })}
         </div>
       </section>
     </div>
@@ -334,8 +422,9 @@ function AnalyticsPage() {
   const { user, token, setAuth, logout } = useAuthStore()
   const navigate = useNavigate()
   const assessmentStartedAt = useRef(Date.now())
+  const [sessions, setSessions] = useState<any[]>([])
   const load = () => fetchAnalytics().then(setData)
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load(); fetchSessions().then(setSessions) }, [])
   const saveScore = async (phase: 'pre' | 'post') => {
     const score = Number(scores[phase])
     if (Number.isNaN(score) || score < 0 || score > 100) return
@@ -381,14 +470,37 @@ function AnalyticsPage() {
         <button onClick={downloadAccount}>Export my data</button>
         <button className="danger-button" onClick={removeAccount}>Delete account and records</button>
       </section>
+      <section className="analytics-card privacy-card"><span>ACCOUNT SECURITY</span><h2>Active sessions</h2>
+        <p>{user?.email_verified ? 'Email verified' : 'Email verification pending'} · {sessions.filter((item) => item.active).length} active refresh session(s)</p>
+        {sessions.slice(0, 4).map((session) => <div className="session-row" key={session.id}><strong>{session.user_agent || 'Unknown browser'}</strong><small>{session.ip_address || 'Unknown IP'} · expires {new Date(session.expires_at).toLocaleDateString()}</small></div>)}
+        <button onClick={async () => { await logoutAll(); logout(); navigate('/auth') }}>Sign out every device</button>
+      </section>
     </div>
   )
 }
 
 function ResearchPage({ isResearcher }: { isResearcher: boolean }) {
   const [data, setData] = useState<any>(null)
+  const [quality, setQuality] = useState<any>(null)
+  const [usage, setUsage] = useState<any>(null)
+  const [experiments, setExperiments] = useState<any[]>([])
+  const [filters, setFilters] = useState<Record<string, string>>({})
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteResult, setInviteResult] = useState('')
+  const [experimentForm, setExperimentForm] = useState({ name: '', hypothesis: '' })
   const [error, setError] = useState('')
-  useEffect(() => { if (isResearcher) fetchResearch().then(setData).catch((err) => setError(err.response?.data?.detail)) }, [isResearcher])
+  const loadAdvanced = async (activeFilters = filters) => {
+    const [qualityData, usageData, experimentData] = await Promise.all([
+      fetchResearchQuality(activeFilters), fetchProviderUsage(), fetchExperiments(),
+    ])
+    setQuality(qualityData); setUsage(usageData); setExperiments(experimentData)
+  }
+  useEffect(() => {
+    if (isResearcher) {
+      fetchResearch().then(setData).catch((err) => setError(err.response?.data?.detail))
+      void loadAdvanced({})
+    }
+  }, [isResearcher])
   if (!isResearcher) return <div className="research-locked"><ShieldCheck /><span>RESEARCH MODE</span><h2>Aggregated evidence is role protected.</h2><p>A project-issued researcher account is required for moderator comparisons, platform-wide metrics, and anonymized CSV export.</p></div>
   if (error) return <div className="research-locked">{error}</div>
   if (!data) return <div className="platform-loading"><Loader2 className="spin" /> Aggregating research evidence...</div>
@@ -400,7 +512,27 @@ function ResearchPage({ isResearcher }: { isResearcher: boolean }) {
     <div className="research-page">
       <div className="research-title"><div><span>RESEARCH MODE</span><h2>Aggregated learning analytics</h2></div><button onClick={download}><Download /> Export CSV</button></div>
       <div className="data-quality-note"><strong>Dataset labeling:</strong> {data.data_source.observed} observed interactions and {data.data_source.simulated} simulated demo interactions. Simulated records are labeled in exports and are not evidence of validated effectiveness.</div>
+      {quality?.warnings?.length ? <div className="research-warning"><AlertTriangle /> <div><strong>Data quality warnings</strong>{quality.warnings.map((warning: string) => <p key={warning}>{warning}</p>)}</div></div> : null}
+      <section className="content-card research-filter-card"><span>ANALYSIS FILTERS</span><h2>Define the comparison slice</h2>
+        <div className="filter-grid">
+          <select value={filters.language || ''} onChange={(event) => setFilters({ ...filters, language: event.target.value })}><option value="">All languages</option><option value="hi">Hindi</option><option value="de">German</option><option value="ja">Japanese</option></select>
+          <select value={filters.proficiency || ''} onChange={(event) => setFilters({ ...filters, proficiency: event.target.value })}><option value="">All proficiency</option><option>beginner</option><option>intermediate</option><option>advanced</option></select>
+          <select value={filters.skill || ''} onChange={(event) => setFilters({ ...filters, skill: event.target.value })}><option value="">All skills</option><option>vocabulary</option><option>grammar</option><option>listening</option><option>speaking</option><option>writing</option></select>
+          <select value={filters.experiment_group || ''} onChange={(event) => setFilters({ ...filters, experiment_group: event.target.value })}><option value="">All groups</option><option value="llm_tutor">LLM tutor</option><option value="structured_baseline">Structured baseline</option></select>
+          <button onClick={() => loadAdvanced(filters)}><RefreshCw /> Apply filters</button>
+        </div>
+      </section>
       <div className="metric-grid">{Object.entries(data.summary).map(([key, value]) => <article className="metric-card" key={key}><span>{key.split('_').join(' ')}</span><strong>{String(value)}</strong><p>Aggregated platform metric</p></article>)}</div>
+      {quality ? <div className="research-comparisons">
+        <section className="content-card research-group"><span>INFERENCE READINESS</span><h2>Uncertainty and effect size</h2>
+          {Object.entries(quality.groups).map(([key, group]: any) => <article key={key}><h3>{key.replace('_', ' ')}</h3><small>n = {group.n}</small><div><b>MEAN {group.mean ?? 'N/A'}</b><b>95% CI {group.confidence_interval_95?.join(' to ') || 'insufficient n'}</b></div></article>)}
+          <p>Effect size (Cohen's d): <strong>{quality.effect_size_cohens_d ?? 'insufficient data'}</strong></p>
+        </section>
+        <section className="content-card research-group"><span>COMPLETION FUNNEL</span><h2>Participation integrity</h2>
+          {Object.entries(quality.completion_funnel).map(([key, value]) => <article key={key}><h3>{key.split('_').join(' ')}</h3><strong>{String(value)}</strong></article>)}
+          <p>Attrition: {quality.attrition_rate}% · Data completeness: {quality.data_completeness}%</p>
+        </section>
+      </div> : null}
       <div className="research-comparisons">
         <ResearchGroup title="Experimental Comparison" subtitle="LLM vs Structured Baseline" rows={data.experimental} />
         <ResearchGroup title="Delivery Comparison" subtitle="Text vs Multimodal" rows={data.delivery} />
@@ -411,6 +543,22 @@ function ResearchPage({ isResearcher }: { isResearcher: boolean }) {
         <ResearchGroup title="Simulated Demo" subtitle="Text vs Multimodal" rows={data.simulated_demo.delivery} />
       </div>
       <section className="content-card moderator-card"><span>MODERATOR DISTRIBUTION</span><h2>Language context</h2><div>{data.moderators.language_distribution.map((item: any) => <p key={item.language}><strong>{item.language}</strong><i><b style={{ width: `${Math.min(item.count * 12, 100)}%` }} /></i><span>{item.count} interactions</span></p>)}</div></section>
+      <div className="research-comparisons">
+        <section className="content-card research-admin"><span>EXPERIMENT LIFECYCLE</span><h2>Version and freeze protocols</h2>
+          <input value={experimentForm.name} onChange={(event) => setExperimentForm({ ...experimentForm, name: event.target.value })} placeholder="Experiment name" />
+          <textarea value={experimentForm.hypothesis} onChange={(event) => setExperimentForm({ ...experimentForm, hypothesis: event.target.value })} placeholder="Predeclared hypothesis" />
+          <button onClick={async () => { await createExperiment(experimentForm); setExperimentForm({ name: '', hypothesis: '' }); await loadAdvanced() }}><FlaskConical /> Create draft</button>
+          {experiments.map((experiment) => <article key={experiment.id}><div><strong>{experiment.name} v{experiment.version}</strong><small>{experiment.status} · {experiment.enrollment_count} enrolled</small></div>{experiment.status === 'draft' ? <button onClick={async () => { await activateExperiment(experiment.id); await loadAdvanced() }}>Freeze and activate</button> : null}</article>)}
+        </section>
+        <section className="content-card research-admin"><span>RESEARCHER ACCESS</span><h2>Issue an invitation</h2>
+          <p>Invitations replace shared researcher passwords and expire automatically.</p>
+          <input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="researcher@example.edu" />
+          <button onClick={async () => { const result = await inviteResearcher(inviteEmail); setInviteResult(result.invitation_token || 'Invitation issued through configured email delivery.'); setInviteEmail('') }}><UserPlus /> Invite researcher</button>
+          {inviteResult ? <div className="inline-notice">{inviteResult}</div> : null}
+          <h3>AI operations</h3>
+          <p>{usage?.requests || 0} requests · {usage?.failed_requests || 0} failed · {usage?.prompt_tokens || 0} input tokens · estimated ${usage?.estimated_cost_usd || 0}</p>
+        </section>
+      </div>
     </div>
   )
 }

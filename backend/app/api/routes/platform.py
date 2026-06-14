@@ -1,9 +1,9 @@
 import csv
 import io
 from datetime import datetime, timedelta
-from difflib import SequenceMatcher
+import time
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -12,11 +12,18 @@ from app.api.routes.auth import serialize_user
 from app.api.routes.auth import experiment_assignment
 from app.core.security import get_current_user
 from app.database import get_db
-from app.models import Interaction, LessonProgress, MemoryProfile, ReviewItem, User
+from app.models import (
+    AIJob, AuditLog, Experiment, ExperimentEnrollment, GeneratedExercise, Interaction,
+    LessonProgress, ListeningAttempt, MemoryProfile, OneTimeToken, ProviderUsage,
+    RefreshSession, ResearcherInvitation, ReviewItem, SkillMastery, User,
+)
 from app.services import ai as ai_service
 from app.services.analytics import grouped_metrics, interaction_metrics, observed_retention, research_summary, skill_metrics
 from app.services.content import CURRICULUM, EXERCISES, LANGUAGES, find_exercise, find_lesson, language_by_code
 from app.services.spaced_repetition import schedule_sm2
+from app.services.adaptive import mastery_snapshot, recommendation, update_mastery
+from app.services.pronunciation import compare_words
+from app.services.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 
@@ -137,8 +144,10 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
     return {
         "metrics": metrics,
         "language": selected,
-        "level": user.proficiency.title(),
-        "next_lesson": CURRICULUM[user.selected_language][0]["lessons"][0],
+        "level": user.cefr_level,
+        "next_lesson": recommendation(db, user)["action"],
+        "adaptive_recommendation": recommendation(db, user),
+        "mastery": mastery_snapshot(db, user),
         "daily_word": {
             "hi": {"word": "रोटी", "romanization": "Roti", "meaning": "Bread"},
             "de": {"word": "Reise", "romanization": "RY-zuh", "meaning": "Journey"},
@@ -167,7 +176,11 @@ def curriculum(db: Session = Depends(get_db), user: User = Depends(get_current_u
     for level in CURRICULUM[user.selected_language]:
         lessons = [{**lesson, **progress.get(lesson["id"], {"completed": False, "score": 0})} for lesson in level["lessons"]]
         unlocked = level["level"] == 1 or all(item["completed"] for item in levels[-1]["lessons"])
-        levels.append({**level, "lessons": lessons, "unlocked": unlocked, "completed_count": sum(1 for item in lessons if item["completed"])})
+        levels.append({
+            **level, "cefr": {1: "A1", 2: "A2", 3: "B1"}.get(level["level"], "B1"),
+            "mastery_required": 70, "lessons": lessons, "unlocked": unlocked,
+            "completed_count": sum(1 for item in lessons if item["completed"]),
+        })
     return {"language": language_by_code(user.selected_language), "levels": levels}
 
 
@@ -242,6 +255,7 @@ def complete_lesson(
         ))
         for term in lesson.get("review_terms", []):
             add_review_item(db, user, language_code, term["term"], term["translation"])
+        update_mastery(db, user, language_code, "structured-learning", 100)
     db.commit()
     return {"completed": True, "xp": user.xp, "xp_awarded": lesson["xp"] if newly_completed else 0}
 
@@ -257,8 +271,16 @@ def submit_exercise(payload: ExerciseSubmission, db: Session = Depends(get_db), 
     if not found:
         raise HTTPException(status_code=404, detail="Exercise not found")
     language_code, exercise = found
+    if language_code != user.selected_language:
+        raise HTTPException(status_code=409, detail="Select this exercise's language first")
     correct = payload.answer.strip().casefold() == exercise["answer"].strip().casefold()
-    xp, score = (15, 100) if correct else (3, 25)
+    prior_correct = db.query(Interaction).filter(
+        Interaction.user_id == user.id,
+        Interaction.interaction_type == "exercise",
+        Interaction.prompt == exercise["prompt"],
+        Interaction.correct.is_(True),
+    ).first()
+    xp, score = ((0 if prior_correct else 15), 100) if correct else (3, 25)
     user.xp += xp
     db.add(Interaction(
         user_id=user.id, language_code=language_code, interaction_type="exercise",
@@ -268,6 +290,7 @@ def submit_exercise(payload: ExerciseSubmission, db: Session = Depends(get_db), 
         engagement_seconds=payload.engagement_seconds, **interaction_values(user),
     ))
     add_review_item(db, user, language_code, exercise["answer"], exercise["prompt"])
+    update_mastery(db, user, language_code, exercise["skill"], score)
     db.commit()
     return {
         "correct": correct, "expected_answer": exercise["answer"],
@@ -277,7 +300,8 @@ def submit_exercise(payload: ExerciseSubmission, db: Session = Depends(get_db), 
 
 
 @router.post("/tutor")
-def tutor(payload: TutorRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def tutor(payload: TutorRequest, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    enforce_rate_limit(request, "ai-tutor", user.id)
     if payload.language_code not in {item["code"] for item in LANGUAGES}:
         raise HTTPException(status_code=422, detail="Unsupported language")
     profile = db.query(MemoryProfile).filter(MemoryProfile.user_id == user.id).first()
@@ -288,6 +312,7 @@ def tutor(payload: TutorRequest, db: Session = Depends(get_db), user: User = Dep
             payload.message, payload.language_code,
             profile.notes if profile else "", profile.vocab_focus if profile else "", profile.grammar_focus if profile else "",
         )
+    usage = result.pop("_usage", None)
     xp = int(result.get("xp_awarded", 5))
     correction = result.get("correction", "")
     score = 88 if not correction else 62
@@ -305,12 +330,25 @@ def tutor(payload: TutorRequest, db: Session = Depends(get_db), user: User = Dep
     ))
     if result.get("vocab_update"):
         add_review_item(db, user, payload.language_code, result["vocab_update"])
+    update_mastery(db, user, payload.language_code, payload.skill, score)
+    if usage:
+        prompt_tokens = int(usage.get("prompt_tokens", 0))
+        completion_tokens = int(usage.get("completion_tokens", 0))
+        db.add(ProviderUsage(
+            user_id=user.id, provider="groq", operation="tutor", model=ai_service.CHAT_MODEL,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            estimated_cost_usd=round(
+                prompt_tokens / 1_000_000 * ai_service.settings.groq_input_cost_per_million
+                + completion_tokens / 1_000_000 * ai_service.settings.groq_output_cost_per_million, 8,
+            ),
+        ))
     db.commit()
     return {**result, "total_xp": user.xp, "score": score}
 
 
 @router.post("/translate")
-def translate(payload: TranslationRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def translate(payload: TranslationRequest, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    enforce_rate_limit(request, "ai-translate", user.id)
     if payload.language_code not in {item["code"] for item in LANGUAGES}:
         raise HTTPException(status_code=422, detail="Unsupported language")
     result = ai_service.translate_text(payload.text, payload.language_code)
@@ -321,12 +359,14 @@ def translate(payload: TranslationRequest, db: Session = Depends(get_db), user: 
         engagement_seconds=payload.engagement_seconds, **interaction_values(user),
     ))
     user.xp += 5
+    update_mastery(db, user, payload.language_code, "translation", 75)
     db.commit()
     return {**result, "xp_awarded": 5, "total_xp": user.xp}
 
 
 @router.post("/pronunciation")
 async def pronunciation(
+    request: Request,
     audio: UploadFile = File(...),
     target: str = Form(...),
     language_code: str = Form(...),
@@ -334,18 +374,18 @@ async def pronunciation(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    enforce_rate_limit(request, "ai-pronunciation", user.id, limit=8)
     if language_code not in {item["code"] for item in LANGUAGES}:
         raise HTTPException(status_code=422, detail="Unsupported language")
     audio_bytes = await audio.read()
-    if not audio_bytes or len(audio_bytes) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=422, detail="Audio must be between 1 byte and 8 MB")
+    if not audio_bytes or len(audio_bytes) > ai_service.settings.max_audio_bytes:
+        raise HTTPException(status_code=422, detail=f"Audio must be between 1 byte and {ai_service.settings.max_audio_bytes // (1024 * 1024)} MB")
     try:
         transcript = ai_service.transcribe_audio(audio_bytes, audio.filename or "audio.webm")
     except Exception:
         raise HTTPException(status_code=503, detail="Pronunciation service is temporarily unavailable")
-    normalized_target = " ".join(target.casefold().split())
-    normalized_transcript = " ".join(str(transcript).casefold().split())
-    score = round(SequenceMatcher(None, normalized_target, normalized_transcript).ratio() * 100)
+    comparison = compare_words(target, str(transcript))
+    score = comparison["score"]
     xp = 15 if score >= 80 else 8 if score >= 55 else 3
     db.add(Interaction(
         user_id=user.id, language_code=language_code, interaction_type="pronunciation",
@@ -354,11 +394,14 @@ async def pronunciation(
         score=score, xp_earned=xp, engagement_seconds=engagement_seconds, **interaction_values(user),
     ))
     user.xp += xp
+    update_mastery(db, user, language_code, "speaking", score)
     db.commit()
     return {
         "transcript": transcript,
         "score": score,
         "feedback": "Clear pronunciation." if score >= 80 else "Try again slowly and match each syllable." if score >= 55 else "Listen to the model phrase and repeat in shorter parts.",
+        "word_feedback": comparison["words"],
+        "disclaimer": comparison["disclaimer"],
         "xp_awarded": xp,
         "total_xp": user.xp,
     }
@@ -411,6 +454,7 @@ def review(review_id: int, payload: ReviewSubmission, db: Session = Depends(get_
         **interaction_values(user),
     ))
     user.xp += 5
+    update_mastery(db, user, item.language_code, "vocabulary", score)
     db.commit()
     return {"next_review_at": item.next_review_at, "interval_days": item.interval_days, "difficulty": item.difficulty, "xp_awarded": 5}
 
@@ -430,6 +474,8 @@ def analytics(db: Session = Depends(get_db), user: User = Depends(get_current_us
         "confusion_matrix": {"true_positive": tp, "false_positive": fp, "true_negative": tn, "false_negative": fn},
         "retention_curve": observed_retention(interactions, reviews_data),
         "skill_scores": skill_metrics(interactions),
+        "mastery": mastery_snapshot(db, user),
+        "adaptive_recommendation": recommendation(db, user),
         "comparisons": {
             "experimental": grouped_metrics(consented, "experiment_group", ["llm_tutor", "structured_baseline"]),
             "delivery": grouped_metrics(consented, "delivery_group", ["text_only", "multimodal"]),
@@ -519,6 +565,40 @@ def update_consent(payload: ConsentUpdate, db: Session = Depends(get_db), user: 
 
 @router.delete("/account", status_code=204)
 def delete_account(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    created_experiment_ids = [
+        row[0]
+        for row in db.query(Experiment.id).filter(Experiment.created_by_user_id == user.id).all()
+    ]
+    if created_experiment_ids:
+        db.query(ExperimentEnrollment).filter(
+            ExperimentEnrollment.experiment_id.in_(created_experiment_ids)
+        ).delete(synchronize_session=False)
+        db.query(Experiment).filter(
+            Experiment.id.in_(created_experiment_ids)
+        ).delete(synchronize_session=False)
+
+    for model in (
+        ExperimentEnrollment,
+        ResearcherInvitation,
+        GeneratedExercise,
+        AIJob,
+        ListeningAttempt,
+        RefreshSession,
+        OneTimeToken,
+        ProviderUsage,
+        AuditLog,
+        SkillMastery,
+        Interaction,
+        LessonProgress,
+        ReviewItem,
+        MemoryProfile,
+    ):
+        user_column = (
+            model.invited_by_user_id
+            if model is ResearcherInvitation
+            else model.user_id
+        )
+        db.query(model).filter(user_column == user.id).delete(synchronize_session=False)
     db.delete(user)
     db.commit()
     return Response(status_code=204)

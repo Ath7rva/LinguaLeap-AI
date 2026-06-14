@@ -5,7 +5,8 @@ import { User } from '../types'
 interface AuthState {
   user: User | null
   token: string | null
-  setAuth: (user: User, token: string) => void
+  refreshToken: string | null
+  setAuth: (user: User, token: string, refreshToken?: string) => void
   updateXP: (xp: number) => void
   logout: () => void
 }
@@ -15,10 +16,12 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user: null,
       token: null,
+      refreshToken: null,
 
-      setAuth: (user, token) => {
+      setAuth: (user, token, refreshToken) => {
         localStorage.setItem('token', token)
-        set({ user, token })
+        if (refreshToken) localStorage.setItem('refresh_token', refreshToken)
+        set((state) => ({ user, token, refreshToken: refreshToken || state.refreshToken }))
       },
 
       updateXP: (xp) =>
@@ -28,7 +31,8 @@ export const useAuthStore = create<AuthState>()(
 
       logout: () => {
         localStorage.removeItem('token')
-        set({ user: null, token: null })
+        localStorage.removeItem('refresh_token')
+        set({ user: null, token: null, refreshToken: null })
       },
     }),
     { name: 'lingualeap-auth' }

@@ -20,6 +20,19 @@ This document keeps the college report, resume discussion, and application behav
 - Automated backend tests
 - Managed Neon PostgreSQL production persistence
 - Alembic initial migration for versioned PostgreSQL schema creation
+- A1-A2-B1 product placement and adaptive skill mastery
+- Explainable next-step recommendations
+- Native listening clips and recorded listening attempts
+- Word-level transcript comparison for pronunciation practice
+- Durable personalized-practice and pronunciation job records
+- Translation and generated-practice caching with optional Redis
+- Per-user/IP rate limiting with Redis or process-local fallback
+- Refresh-token rotation, verification/reset tokens, and session revocation
+- Expiring researcher invitations
+- Versioned and frozen experiment configurations with stable enrollment
+- Confidence intervals, effect sizes, attrition, funnels, cohorts, and sample-size warnings
+- Request IDs, security headers, optional Sentry, and AI usage/cost records
+- Backend, frontend component, browser smoke, migration, build, and secret-scanning CI checks
 
 ## Not Implemented
 
@@ -32,7 +45,7 @@ This document keeps the college report, resume discussion, and application behav
 
 ## Claim Boundaries
 
-Pronunciation scoring compares Whisper's transcription with the target phrase. It is not a phoneme-level acoustic assessment.
+Pronunciation scoring compares Whisper's transcription with the target phrase and identifies word-level matches, substitutions, omissions, and additions. It is not a phoneme-level acoustic assessment.
 
 The LLM tutor uses a hosted Groq model. LinguaLeap does not train or fine-tune that model.
 
@@ -41,3 +54,5 @@ Analytics summarize stored interactions. They demonstrate an evaluation design b
 Simulated users exist only to make the research dashboard understandable during a demonstration. Their records carry `is_simulated=true` and are excluded from primary observed experiment comparisons.
 
 The deployed Vercel backend uses managed Neon PostgreSQL. Persistence was verified by creating an account, deploying a new production version, and successfully authenticating the same account afterward.
+
+Vercel does not provide an always-running worker process for this application. AI jobs are persisted with statuses, idempotency keys, attempts, and results, then executed opportunistically in background tasks and retried during polling. This is durable orchestration, not a claim of a dedicated queue-worker cluster.

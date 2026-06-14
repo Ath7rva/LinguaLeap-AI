@@ -3,7 +3,10 @@ export interface User {
   name: string
   email: string
   role: 'learner' | 'researcher'
+  email_verified: boolean
   proficiency: string
+  cefr_level: string
+  placement_score: number | null
   learning_goal: string
   selected_language: string
   anonymous_id: string
@@ -41,6 +44,13 @@ export interface DashboardData {
   next_lesson: Lesson
   daily_word: { word: string; romanization: string; meaning: string }
   challenge: { title: string; description: string; reward: number }
+  adaptive_recommendation: {
+    action: { type: string; target: string; title: string }
+    reason: string
+    weakest_skill: { skill: string; mastery: number; attempts: number }
+    cefr_level: string
+  }
+  mastery: { skill: string; mastery: number; attempts: number }[]
 }
 
 export interface Lesson {
@@ -60,6 +70,7 @@ export interface Lesson {
 
 export interface CurriculumLevel {
   level: number
+  cefr: string
   title: string
   description: string
   completed_count: number

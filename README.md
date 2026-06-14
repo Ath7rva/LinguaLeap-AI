@@ -8,12 +8,20 @@ LinguaLeap AI is an intelligent, interactive language-learning platform designed
 - Multi-level lessons with grammar explanations, vocabulary, examples, prerequisites, and XP
 - Contextual translation with romanization and cultural notes
 - Microphone recording, Groq Whisper transcription, and pronunciation similarity scoring
+- Word-level pronunciation feedback for matched, missed, substituted, and extra words
+- Native Hindi, German, and Japanese listening clips with normal/slow playback and transcript-aware scoring
+- A1-A2-B1 placement, prerequisite paths, per-skill mastery, and explainable next-step recommendations
+- AI-generated practice based on weak skills and due vocabulary
 - MCQ and writing practice with immediate feedback
 - Simplified SM-2 spaced repetition with stored review dates, quality, interval, and difficulty
 - Progress, skill, retention, engagement, and pre/post assessment analytics
 - Optional, consent-based LLM/baseline and text/multimodal experiment assignment
 - Researcher-only aggregated analytics and anonymized CSV export
 - Learner data export, consent withdrawal, and account deletion
+- Rotating refresh sessions, email verification, password reset, session revocation, and researcher invitations
+- Versioned experiment protocols with frozen configurations and stable participant assignment
+- Confidence intervals, effect sizes, attrition, completion funnels, cohort counts, and data-quality warnings
+- Request IDs, security headers, optional Sentry, provider usage/cost tracking, caching, and rate limiting
 
 ## Technology
 
@@ -22,6 +30,7 @@ LinguaLeap AI is an intelligent, interactive language-learning platform designed
 - AI services: Groq-hosted language model and Whisper speech-to-text
 - Database: SQLite for local development; managed Neon PostgreSQL in production
 - Deployment: Vercel frontend and FastAPI serverless backend
+- Quality: Pytest, Vitest, Playwright, GitHub Actions, Dependabot, and Gitleaks
 
 This project does not claim to use TensorFlow, PyTorch, MongoDB, Kubernetes, a custom-trained model, or independently validated accuracy. See [Implementation Reality](docs/IMPLEMENTATION_REALITY.md).
 
@@ -30,7 +39,7 @@ This project does not claim to use TensorFlow, PyTorch, MongoDB, Kubernetes, a c
 - [Implementation-aligned report (PDF)](docs/LinguaLeap_AI_Implementation_Aligned_Report.pdf)
 - [Editable implementation-aligned report (DOCX)](docs/LinguaLeap_AI_Implementation_Aligned_Report.docx)
 
-This report replaces the earlier draft's unsupported implementation and effectiveness claims with statements that match the software as implemented on 12 June 2026.
+The report is retained as a historical implementation-aligned artifact. Current application capabilities are documented in this README and [Implementation Reality](docs/IMPLEMENTATION_REALITY.md).
 
 ## Research Data
 
@@ -72,6 +81,14 @@ DATABASE_URL=postgresql://user:password@host/database?sslmode=require
 FRONTEND_URL=http://localhost:5173
 SEED_DEMO_DATA=false
 RESEARCHER_ACCESS_CODE=choose_a_private_code
+ENVIRONMENT=development
+REDIS_URL=
+SENTRY_DSN=
+EMAIL_DELIVERY_MODE=console
+RESEND_API_KEY=
+EMAIL_FROM=LinguaLeap AI <onboarding@resend.dev>
+RATE_LIMIT_PER_MINUTE=60
+AI_RATE_LIMIT_PER_MINUTE=12
 ```
 
 Frontend:
@@ -82,6 +99,10 @@ VITE_API_BASE_URL=http://localhost:8000
 
 The production backend is connected to managed Neon PostgreSQL through Vercel Marketplace. Its pooled `DATABASE_URL` is injected as an encrypted environment variable, and Alembic applies the versioned schema during application startup.
 
+`REDIS_URL` is optional. When configured, shared caching and rate-limit counters use Redis. Without it, the application uses a process-local fallback suitable for development but not globally consistent across serverless instances.
+
+Slow personalized-practice and pronunciation operations use durable database job records, idempotency keys, retries, and client polling. On Vercel, work is launched opportunistically through FastAPI background tasks rather than claiming a permanently running worker.
+
 ## Verification
 
 ```powershell
@@ -89,10 +110,13 @@ cd backend
 python -m pytest -q
 
 cd ..\frontend
+npm.cmd run test
 npm.cmd run build
+npm.cmd run test:e2e
+npm.cmd audit --audit-level=high
 ```
 
-The backend tests cover authentication and experiment assignment, lesson prerequisites, XP duplication, quiz scoring, computed analytics, role authorization, consent-gated anonymized export, consent withdrawal, and spaced repetition.
+The backend suite covers refresh-token rotation, verification and reset flows, placement/mastery, listening, asynchronous pronunciation, generated-practice validation, invitations, frozen experiment assignment, research-quality warnings, authentication, lesson prerequisites, XP duplication, analytics, authorization, anonymized exports, consent withdrawal, and spaced repetition.
 
 ## Live URLs
 
@@ -100,4 +124,4 @@ The backend tests cover authentication and experiment assignment, lesson prerequ
 - API: https://lingualeap-api.vercel.app
 - Health: https://lingualeap-api.vercel.app/health
 
-Researcher registration requires both an `@admin.local` address and the private `RESEARCHER_ACCESS_CODE`. Production deployments should eventually replace this project-level code with administrator-managed invitations.
+New researcher accounts should use expiring invitations issued from the researcher console. `RESEARCHER_ACCESS_CODE` remains only as a bootstrap compatibility mechanism for the first administrator.

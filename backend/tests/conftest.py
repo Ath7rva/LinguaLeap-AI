@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.api.routes import auth
+from app.api.routes import advanced, auth
 
 
 @pytest.fixture()
@@ -18,6 +18,8 @@ def client():
         poolclass=StaticPool,
     )
     testing_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    original_job_session = advanced.SessionLocal
+    advanced.SessionLocal = testing_session
     Base.metadata.create_all(bind=engine)
 
     def override_db():
@@ -31,6 +33,7 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    advanced.SessionLocal = original_job_session
     Base.metadata.drop_all(bind=engine)
 
 
