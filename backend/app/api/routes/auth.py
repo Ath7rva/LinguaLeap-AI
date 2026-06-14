@@ -31,6 +31,7 @@ class RegisterRequest(BaseModel):
     pre_test_score: float | None = None
     researcher_access_code: str = ""
     invitation_token: str = ""
+    selected_language: str = "hi"
 
 
 class TokenRequest(BaseModel):
@@ -48,6 +49,16 @@ class ResetPasswordRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+def email_delivery_available():
+    return settings.email_delivery_mode == "resend" and bool(settings.resend_api_key)
+
+
+def email_verification_required():
+    return email_delivery_available() or (
+        settings.email_delivery_mode == "console" and settings.environment != "production"
+    )
 
 
 def experiment_assignment(email: str, consent: bool):
@@ -134,6 +145,8 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         raise HTTPException(status_code=409, detail="Email already registered")
 
     email = payload.email.lower().strip()
+    if payload.selected_language not in {"hi", "de", "ja"}:
+        raise HTTPException(status_code=422, detail="Unsupported language")
     experiment_group, delivery_group = experiment_assignment(email, payload.research_consent)
     wants_researcher = email.endswith("@admin.local") or bool(payload.invitation_token)
     invitation = None
@@ -157,10 +170,11 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         email=email,
         password_hash=hash_password(payload.password),
         role="researcher" if wants_researcher else "learner",
-        email_verified=bool(invitation),
+        email_verified=bool(invitation) or not email_verification_required(),
         proficiency=payload.proficiency,
         cefr_level={"beginner": "A1", "intermediate": "A2", "advanced": "B1"}.get(payload.proficiency, "A1"),
         learning_goal=payload.learning_goal,
+        selected_language=payload.selected_language,
         experiment_group=experiment_group,
         delivery_group=delivery_group,
         research_consent=payload.research_consent,
@@ -172,23 +186,27 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     if invitation:
         invitation.accepted_at = datetime.utcnow()
     db.add(MemoryProfile(user_id=user.id))
-    verify_token = generate_opaque_token()
-    db.add(OneTimeToken(
-        user_id=user.id,
-        purpose="verify-email",
-        token_hash=token_hash(verify_token),
-        expires_at=datetime.utcnow() + timedelta(hours=24),
-    ))
+    verify_token = ""
+    if not user.email_verified:
+        verify_token = generate_opaque_token()
+        db.add(OneTimeToken(
+            user_id=user.id,
+            purpose="verify-email",
+            token_hash=token_hash(verify_token),
+            expires_at=datetime.utcnow() + timedelta(hours=24),
+        ))
     db.add(AuditLog(user_id=user.id, action="account.registered", resource_type="user", resource_id=str(user.id)))
     db.commit()
     db.refresh(user)
-    send_transactional_email(
-        user.email,
-        "Verify your LinguaLeap AI email",
-        f'<p>Verify your email to protect your learning account.</p><p><code>{verify_token}</code></p>',
-    )
+    if verify_token:
+        send_transactional_email(
+            user.email,
+            "Verify your LinguaLeap AI email",
+            f'<p>Verify your email to protect your learning account.</p><p><code>{verify_token}</code></p>',
+        )
     response = token_response(db, user, request)
-    if settings.email_delivery_mode == "console" and settings.environment != "production":
+    response["email_delivery_available"] = email_delivery_available()
+    if verify_token and settings.email_delivery_mode == "console" and settings.environment != "production":
         response["verification_token"] = verify_token
     return response
 
@@ -274,9 +292,43 @@ def verify_email(payload: TokenRequest, db: Session = Depends(get_db)):
     return {"verified": True}
 
 
+@router.post("/resend-verification")
+def resend_verification(payload: EmailRequest, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(request, "auth-verify", limit=5)
+    if not email_delivery_available():
+        raise HTTPException(status_code=503, detail="Email delivery is not configured for this deployment")
+    user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
+    if not user or user.email_verified:
+        return {"message": "If verification is required, a new email has been sent."}
+    db.query(OneTimeToken).filter(
+        OneTimeToken.user_id == user.id,
+        OneTimeToken.purpose == "verify-email",
+        OneTimeToken.used_at.is_(None),
+    ).update({OneTimeToken.used_at: datetime.utcnow()})
+    raw = generate_opaque_token()
+    db.add(OneTimeToken(
+        user_id=user.id,
+        purpose="verify-email",
+        token_hash=token_hash(raw),
+        expires_at=datetime.utcnow() + timedelta(hours=24),
+    ))
+    db.commit()
+    send_transactional_email(
+        user.email,
+        "Verify your LinguaLeap AI email",
+        f'<p>Verify your email to protect your learning account.</p><p><code>{raw}</code></p>',
+    )
+    return {"message": "If verification is required, a new email has been sent."}
+
+
 @router.post("/forgot-password")
 def forgot_password(payload: EmailRequest, request: Request, db: Session = Depends(get_db)):
     enforce_rate_limit(request, "auth-reset", limit=5)
+    if not email_delivery_available() and settings.environment == "production":
+        raise HTTPException(
+            status_code=503,
+            detail="Password recovery email is temporarily unavailable. Contact the site administrator.",
+        )
     user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
     response = {"message": "If that account exists, a reset link has been issued."}
     if user:

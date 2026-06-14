@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { ArrowRight, BrainCircuit, Eye, EyeOff, Loader2, ShieldCheck, Sparkles } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { forgotPassword, loginUser, registerUser, resetPassword, verifyEmail } from '../lib/api'
 import { useAuthStore } from '../store/auth'
 
 export default function AuthPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const setAuth = useAuthStore((state) => state.setAuth)
   const [mode, setMode] = useState<'register' | 'login' | 'forgot'>('register')
   const [form, setForm] = useState({
@@ -18,6 +19,7 @@ export default function AuthPage() {
     research_consent: false,
     researcher_access_code: '',
     invitation_token: '',
+    selected_language: ['hi', 'de', 'ja'].includes(searchParams.get('language') || '') ? searchParams.get('language')! : 'hi',
   })
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -100,6 +102,11 @@ export default function AuthPage() {
           {mode === 'register' && (
             <>
             <div className="auth-grid">
+              <label>Learning language
+                <select value={form.selected_language} onChange={(e) => setForm({ ...form, selected_language: e.target.value })}>
+                  <option value="hi">Hindi</option><option value="de">German</option><option value="ja">Japanese</option>
+                </select>
+              </label>
               <label>Starting level
                 <select value={form.proficiency} onChange={(e) => setForm({ ...form, proficiency: e.target.value })}>
                   <option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option>

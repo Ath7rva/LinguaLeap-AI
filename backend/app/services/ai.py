@@ -26,13 +26,6 @@ LANGUAGE_NAMES = {
     "ja": "Japanese (日本語)",
 }
 
-FALLBACKS = {
-    "hi": "नमस्ते (Namaste). Let us practice one short Hindi sentence together.",
-    "de": "Hallo! Lass uns einen kurzen deutschen Satz zusammen üben.",
-    "ja": "こんにちは (Konnichiwa). 一緒に短い文を練習しましょう。",
-}
-
-
 class TutorPayload(BaseModel):
     reply: str = Field(min_length=1, max_length=2400)
     correction: str = Field(default="", max_length=800)
@@ -79,11 +72,17 @@ def _parse_json(raw: str, schema):
 
 
 def fallback_tutor_response(language_code: str, reason: str = "") -> dict:
-    return TutorPayload(
-        reply=FALLBACKS.get(language_code, FALLBACKS["hi"]),
-        encouragement="The live tutor is temporarily unavailable, but your practice can continue.",
-        xp_awarded=5,
-    ).model_dump() | {"fallback": True, "fallback_reason": reason[:160]}
+    language = LANGUAGE_NAMES.get(language_code, "your selected language")
+    return {
+        "reply": f"The live {language} tutor is temporarily unavailable. Your message was saved, but it was not evaluated.",
+        "correction": "",
+        "encouragement": "Please retry shortly or use the structured lesson and listening exercises.",
+        "vocab_update": "",
+        "grammar_update": "",
+        "xp_awarded": 0,
+        "fallback": True,
+        "fallback_reason": reason[:160],
+    }
 
 
 def generate_structured_response(message: str, language_code: str) -> dict:
@@ -206,8 +205,36 @@ def _fallback_practice(
         "de": "Hallo",
         "ja": "konnichiwa",
     }.get(language_code, "hello")
-    return {
-        "exercises": [
+    if skill == "grammar":
+        grammar_item = {
+            "hi": ("Complete the sentence: मैं ठीक ___।", "हूँ"),
+            "de": ("Complete the sentence: Ich ___ Alex.", "heiße"),
+            "ja": ("Complete the sentence: わたしは Alex ___。", "です"),
+        }.get(language_code, ("Complete the sentence with the correct verb: I ___ ready.", "am"))
+        exercises = [
+            {
+                "id": f"fallback-{language_code}-{skill}-1",
+                "type": "fill",
+                "prompt": grammar_item[0],
+                "options": [],
+                "answer": grammar_item[1],
+                "explanation": "This checks a sentence-level grammar pattern rather than isolated vocabulary.",
+                "skill": skill,
+                "complexity": "basic",
+            },
+            {
+                "id": f"fallback-{language_code}-{skill}-2",
+                "type": "mcq",
+                "prompt": "Which practice best develops grammar?",
+                "options": ["Build a complete sentence", "Repeat one isolated word", "Skip the sentence"],
+                "answer": "Build a complete sentence",
+                "explanation": "Grammar practice requires a sentence-level pattern, not isolated vocabulary recall.",
+                "skill": skill,
+                "complexity": "basic",
+            },
+        ]
+    else:
+        exercises = [
             {
                 "id": f"fallback-{language_code}-{skill}-1",
                 "type": "fill",
@@ -228,7 +255,9 @@ def _fallback_practice(
                 "skill": skill,
                 "complexity": "basic",
             },
-        ],
+        ]
+    return {
+        "exercises": exercises,
         "fallback": True,
         "cached": False,
         "fallback_reason": reason[:160],

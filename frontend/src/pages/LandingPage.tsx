@@ -31,9 +31,9 @@ const features = [
 ]
 
 const languages = [
-  { script: 'अ', name: 'Hindi', note: 'Devanagari, conversation and culture', color: '#8A6FF0' },
-  { script: 'あ', name: 'Japanese', note: 'Everyday phrases and native script', color: '#EF8E77' },
-  { script: 'Ä', name: 'German', note: 'Confident grammar and pronunciation', color: '#55A58D' },
+  { code: 'hi', script: 'अ', name: 'Hindi', note: 'Devanagari, conversation and culture', color: '#8A6FF0' },
+  { code: 'ja', script: 'あ', name: 'Japanese', note: 'Everyday phrases and native script', color: '#EF8E77' },
+  { code: 'de', script: 'Ä', name: 'German', note: 'Confident grammar and pronunciation', color: '#55A58D' },
 ]
 
 export default function LandingPage() {
@@ -151,7 +151,7 @@ export default function LandingPage() {
         </div>
         <div className="language-list">
           {languages.map((language) => (
-            <Link to="/auth" className="language-row" key={language.name} data-reveal>
+            <Link to={`/auth?language=${language.code}`} className="language-row" key={language.name} data-reveal>
               <span className="language-script" style={{ color: language.color }}>{language.script}</span>
               <span className="language-name">{language.name}</span>
               <span className="language-note">{language.note}</span>

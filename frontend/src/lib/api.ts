@@ -48,6 +48,7 @@ export const loginUser = (email: string, password: string) =>
   }).then((r) => r.data)
 export const fetchMe = () => api.get('/auth/me').then((r) => r.data)
 export const verifyEmail = (token: string) => api.post('/auth/verify-email', { token }).then((r) => r.data)
+export const resendVerification = (email: string) => api.post('/auth/resend-verification', { email }).then((r) => r.data)
 export const forgotPassword = (email: string) => api.post('/auth/forgot-password', { email }).then((r) => r.data)
 export const resetPassword = (token: string, password: string) => api.post('/auth/reset-password', { token, password }).then((r) => r.data)
 export const fetchSessions = () => api.get('/auth/sessions').then((r) => r.data)

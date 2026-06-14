@@ -313,9 +313,9 @@ def tutor(payload: TutorRequest, request: Request, db: Session = Depends(get_db)
             profile.notes if profile else "", profile.vocab_focus if profile else "", profile.grammar_focus if profile else "",
         )
     usage = result.pop("_usage", None)
-    xp = int(result.get("xp_awarded", 5))
+    xp = 0 if result.get("fallback") else int(result.get("xp_awarded", 5))
     correction = result.get("correction", "")
-    score = 88 if not correction else 62
+    score = 0 if result.get("fallback") else 88 if not correction else 62
     user.xp += xp
     if profile:
         profile.vocab_focus = "; ".join(filter(None, [profile.vocab_focus, result.get("vocab_update", "")]))[-1500:]
@@ -330,7 +330,8 @@ def tutor(payload: TutorRequest, request: Request, db: Session = Depends(get_db)
     ))
     if result.get("vocab_update"):
         add_review_item(db, user, payload.language_code, result["vocab_update"])
-    update_mastery(db, user, payload.language_code, payload.skill, score)
+    if not result.get("fallback"):
+        update_mastery(db, user, payload.language_code, payload.skill, score)
     if usage:
         prompt_tokens = int(usage.get("prompt_tokens", 0))
         completion_tokens = int(usage.get("completion_tokens", 0))
@@ -352,16 +353,19 @@ def translate(payload: TranslationRequest, request: Request, db: Session = Depen
     if payload.language_code not in {item["code"] for item in LANGUAGES}:
         raise HTTPException(status_code=422, detail="Unsupported language")
     result = ai_service.translate_text(payload.text, payload.language_code)
+    xp = 0 if result.get("fallback") else 5
+    score = 0 if result.get("fallback") else 75
     db.add(Interaction(
         user_id=user.id, language_code=payload.language_code, interaction_type="translation",
         skill="translation", task_complexity="basic", modality="text", feedback_type="explanatory",
-        prompt=payload.text, response=result["translation"], correct=True, score=75, xp_earned=5,
+        prompt=payload.text, response=result["translation"], correct=not result.get("fallback"), score=score, xp_earned=xp,
         engagement_seconds=payload.engagement_seconds, **interaction_values(user),
     ))
-    user.xp += 5
-    update_mastery(db, user, payload.language_code, "translation", 75)
+    user.xp += xp
+    if not result.get("fallback"):
+        update_mastery(db, user, payload.language_code, "translation", score)
     db.commit()
-    return {**result, "xp_awarded": 5, "total_xp": user.xp}
+    return {**result, "xp_awarded": xp, "total_xp": user.xp}
 
 
 @router.post("/pronunciation")

@@ -33,6 +33,17 @@ def test_email_verification_and_password_reset(client):
     }).status_code == 200
 
 
+def test_registration_preserves_selected_language(client):
+    response = client.post("/auth/register", json={
+        "name": "German Learner",
+        "email": "selected-language@example.com",
+        "password": "SecurePass123!",
+        "selected_language": "de",
+    })
+    assert response.status_code == 201
+    assert response.json()["user"]["selected_language"] == "de"
+
+
 def test_placement_sets_cefr_and_mastery(client):
     data = register(client, "placement@example.com", consent=False)
     response = client.post("/advanced/placement", headers=auth_headers(data), json={"answers": {
@@ -96,6 +107,23 @@ def test_personalized_practice_schema_has_safe_fallback(monkeypatch):
     assert len(result["exercises"]) >= 2
     assert all(item["answer"] for item in result["exercises"])
     assert result["fallback"] is True
+    assert result["exercises"][0]["skill"] == "grammar"
+    assert "sentence" in result["exercises"][0]["prompt"].lower()
+
+
+def test_tutor_fallback_awards_no_xp_or_mastery(client, monkeypatch):
+    monkeypatch.setattr(ai.settings, "groq_api_key", "")
+    data = register(client, "fallback-tutor@example.com", consent=False)
+    response = client.post("/platform/tutor", headers=auth_headers(data), json={
+        "message": "Is this sentence correct?",
+        "language_code": "de",
+        "skill": "grammar",
+        "engagement_seconds": 20,
+    })
+    assert response.status_code == 200
+    assert response.json()["fallback"] is True
+    assert response.json()["xp_awarded"] == 0
+    assert response.json()["total_xp"] == 0
 
 
 def test_personalized_practice_provider_failure_has_usable_fallback(monkeypatch):

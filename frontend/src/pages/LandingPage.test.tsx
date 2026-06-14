@@ -10,4 +10,11 @@ describe('LandingPage', () => {
     expect(screen.getByRole('heading', { name: /learn the language.*live the meaning/i })).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: /start learning|meet your tutor/i }).length).toBeGreaterThan(0)
   })
+
+  it('preserves the selected language for registration', () => {
+    render(<MemoryRouter><LandingPage /></MemoryRouter>)
+    expect(screen.getAllByRole('link', { name: /GermanConfident grammar/i }).every(
+      (link) => link.getAttribute('href') === '/auth?language=de'
+    )).toBe(true)
+  })
 })

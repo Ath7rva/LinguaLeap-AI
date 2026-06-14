@@ -21,7 +21,6 @@ const sections = [
   { id: 'learn', label: 'Learn', icon: BookOpen },
   { id: 'practice', label: 'Practice', icon: MessageCircle },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-  { id: 'research', label: 'Research', icon: ShieldCheck },
 ]
 
 export default function PlatformPage() {
@@ -64,10 +63,9 @@ export default function PlatformPage() {
         <div>
           <div className="rail-brand"><span>LINGUALEAP AI</span><strong>Learn like a game.<br />Remember like a pro.</strong></div>
           <nav>
-            {sections.map(({ id, label, icon: Icon }) => (
+            {[...sections, ...(user?.role === 'researcher' ? [{ id: 'research', label: 'Research', icon: ShieldCheck }] : [])].map(({ id, label, icon: Icon }) => (
               <button key={id} className={section === id ? 'active' : ''} onClick={() => navigate(`/app/${id}`)}>
                 <Icon /> {label}
-                {id === 'research' && user?.role !== 'researcher' ? <span className="lock-dot" /> : null}
               </button>
             ))}
           </nav>
@@ -85,7 +83,7 @@ export default function PlatformPage() {
           </div>
           <div className="header-stats">
             <div><Trophy /><span>EXPERIENCE<strong>{user?.xp} XP</strong></span></div>
-            <div><Flame /><span>STREAK<strong>{user?.streak} days</strong></span></div>
+            <div><Flame /><span>STREAK<strong>{user?.streak} {user?.streak === 1 ? 'day' : 'days'}</strong></span></div>
             <div><Sparkles /><span>LEVEL<strong>{user?.proficiency}</strong></span></div>
             <button onClick={() => { logout(); navigate('/auth') }}><LogOut /> Sign out</button>
           </div>
@@ -96,7 +94,8 @@ export default function PlatformPage() {
         {section === 'learn' && <LearnPage onComplete={async (id, seconds) => { await completeLesson(id, seconds); await refresh() }} />}
         {section === 'practice' && <PracticePage language={selectedLanguage} onProgress={refresh} />}
         {section === 'analytics' && <AnalyticsPage />}
-        {section === 'research' && <ResearchPage isResearcher={user?.role === 'researcher'} />}
+        {section === 'research' && user?.role === 'researcher' && <ResearchPage isResearcher />}
+        {section === 'research' && user?.role !== 'researcher' && <Dashboard dashboard={dashboard} onNavigate={(target) => navigate(`/app/${target}`)} onRefresh={refresh} />}
       </section>
     </main>
   )
@@ -212,7 +211,12 @@ function LearnPage({ onComplete }: { onComplete: (id: string, engagementSeconds:
       {levels.map((level) => <section className="level-card" key={level.level}>
         <div className="level-title"><div><span>LEVEL {level.level}</span><h2>{level.title}</h2><p>{level.description}</p></div><strong>{level.completed_count}/{level.lessons.length} complete</strong></div>
         <div className="lesson-grid">
-          {level.lessons.map((lesson) => <article key={lesson.id}><span>{lesson.kind}</span><h3>{lesson.title}</h3><p>{level.description}</p><div className="tag-row">{lesson.tags.map((tag) => <i key={tag}>{tag}</i>)}</div><footer><b><Sparkles /> {lesson.xp} XP</b><button className={lesson.completed ? 'completed' : ''} disabled={!!working} onClick={() => open(lesson.id)}>{lesson.completed ? <><Check /> Review lesson</> : <>Open lesson <ArrowRight /></>}</button></footer></article>)}
+          {level.lessons.map((lesson) => {
+            const allLessons = levels.flatMap((item) => item.lessons)
+            const prerequisite = allLessons.find((item) => item.id === lesson.prerequisite)
+            const locked = !!lesson.prerequisite && !prerequisite?.completed
+            return <article key={lesson.id}><span>{lesson.kind}</span><h3>{lesson.title}</h3><p>{level.description}</p><div className="tag-row">{lesson.tags.map((tag) => <i key={tag}>{tag}</i>)}</div>{locked ? <p className="lesson-lock-note">Complete “{prerequisite?.title || 'the previous lesson'}” first.</p> : null}<footer><b><Sparkles /> {lesson.xp} XP</b><button className={lesson.completed ? 'completed' : ''} disabled={!!working || locked} onClick={() => open(lesson.id)}>{lesson.completed ? <><Check /> Review lesson</> : locked ? <>Locked</> : <>Open lesson <ArrowRight /></>}</button></footer></article>
+          })}
         </div>
       </section>)}
       {activeLesson ? <div className="lesson-modal" role="dialog" aria-modal="true">
@@ -253,6 +257,7 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
   const [listeningState, setListeningState] = useState<Record<string, any>>({})
   const [generated, setGenerated] = useState<any[]>([])
   const [generating, setGenerating] = useState(false)
+  const [toolError, setToolError] = useState('')
   const [recording, setRecording] = useState(false)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const lastActionAt = useRef(Date.now())
@@ -268,11 +273,13 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
   useEffect(() => { fetchListening().then((data) => setListening(data.exercises)) }, [language.code])
   const send = async () => {
     if (!input.trim() || sending) return
-    const text = input.trim(); setInput(''); setMessages((items) => [...items, { role: 'user', content: text }]); setSending(true)
+    const text = input.trim(); setInput(''); setMessages((items) => [...items, { role: 'user', content: text }]); setSending(true); setToolError('')
     try {
       const data = await sendTutorMessage({ message: text, language_code: language.code, skill, modality: skill === 'speaking' ? 'multimodal' : 'text', task_complexity: 'basic', engagement_seconds: elapsed() })
       setMessages((items) => [...items, { role: 'assistant', content: data.reply, correction: data.correction, xp_awarded: data.xp_awarded }])
       await onProgress()
+    } catch (err: any) {
+      setToolError(err.response?.data?.detail || 'The tutor could not respond. Please try again.')
     } finally { setSending(false) }
   }
   const submit = async (exercise: Exercise, answer: string) => {
@@ -288,9 +295,13 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
   const runTranslation = async () => {
     if (!translationInput.trim()) return
     setTranslating(true)
+    setTranslation(null)
+    setToolError('')
     try {
       setTranslation(await translateText(translationInput, language.code, elapsed()))
       await onProgress()
+    } catch (err: any) {
+      setToolError(err.response?.data?.detail || 'Translation failed. Please retry.')
     } finally { setTranslating(false) }
   }
   const toggleRecording = async () => {
@@ -341,6 +352,7 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
   }
   const generatePractice = async () => {
     setGenerating(true)
+    setToolError('')
     try {
       const created = await createPracticeJob(crypto.randomUUID())
       for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -353,6 +365,8 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
         if (job.status === 'failed') throw new Error(job.error || 'Generation failed')
       }
       throw new Error('Practice generation is taking longer than expected.')
+    } catch (err: any) {
+      setToolError(err.message || 'Unable to build personalized practice.')
     } finally {
       setGenerating(false)
     }
@@ -366,10 +380,11 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
     <div className="practice-layout">
       <section className="tutor-panel">
         <span>CHATBOT LEARNING INTERFACE</span><h2>Tutor Chat</h2>
+        {toolError ? <div className="inline-notice" role="alert">{toolError}</div> : null}
         <div className="skill-tabs">{['vocabulary', 'speaking', 'writing', 'creativity'].map((item) => <button className={skill === item ? 'active' : ''} onClick={() => setSkill(item)} key={item}>{item}</button>)}</div>
         <div className="chat-stream">{messages.map((message, index) => <div className={`chat-message ${message.role}`} key={index}><span>{message.role === 'user' ? `YOU · ${language.name} · ${skill}` : `TUTOR${message.xp_awarded ? ` · +${message.xp_awarded} XP` : ''}`}</span><p>{message.content}</p>{message.correction ? <em>Correction: {message.correction}</em> : null}</div>)}{sending ? <div className="chat-message assistant"><Loader2 className="spin" /> Thinking with your memory profile...</div> : null}</div>
         <div className="prompt-hint">Use one short sentence. Your response quality, modality, skill, and engagement time feed the analytics engine.</div>
-        <div className="chat-input"><textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder={`Practice ${language.name} with your tutor.`} /><button onClick={send} disabled={sending || !input.trim()}><Send /></button></div>
+        <div className="chat-input"><textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder={`Practice ${language.name} with your tutor.`} /><button aria-label="Send message" onClick={send} disabled={sending || !input.trim()}><Send /></button></div>
       </section>
       <section className="exercise-panel"><span>PRACTICE EXERCISES</span><h2>Lesson and Quiz</h2><p>Structured tasks create comparable evidence alongside open-ended conversation.</p>
         <button className="generate-practice" onClick={generatePractice} disabled={generating}>{generating ? <Loader2 className="spin" /> : <WandSparkles />} Build practice from my weak skills</button>
@@ -390,7 +405,7 @@ function PracticePage({ language, onProgress }: { language: Language; onProgress
         <div className="practice-tool"><span>TRANSLATION</span><h2>Translate with context</h2>
           <textarea value={translationInput} onChange={(event) => setTranslationInput(event.target.value)} placeholder="Enter an English phrase" />
           <button onClick={runTranslation} disabled={translating}>{translating ? <Loader2 className="spin" /> : <Languages />} Translate</button>
-          {translation ? <div className="tool-result"><strong>{translation.translation}</strong><em>{translation.romanization}</em><p>{translation.cultural_note}</p></div> : null}
+          {translation ? <div className="tool-result" role="status"><strong>{translation.translation}</strong><em>{translation.romanization}</em><p>{translation.cultural_note}</p>{translation.fallback ? <small>Live translation was unavailable; no XP or mastery progress was awarded.</small> : null}</div> : null}
         </div>
         <div className="practice-tool"><span>PRONUNCIATION</span><h2>Speak and compare</h2>
           <input value={pronunciationTarget} onChange={(event) => setPronunciationTarget(event.target.value)} placeholder={`Phrase in ${language.name}`} />
@@ -453,12 +468,13 @@ function AnalyticsPage() {
     URL.revokeObjectURL(url)
   }
   if (!data) return <div className="platform-loading"><Loader2 className="spin" /> Calculating longitudinal analytics...</div>
-  const matrix = data.confusion_matrix
+  const totalInteractions = data.metrics.total_interactions || 0
+  const enoughEvidence = totalInteractions >= 5
   return (
     <div className="analytics-grid">
-      <section className="analytics-card"><span>CORRECT VS INCORRECT</span><h2>Confusion Matrix</h2><div className="matrix-grid">{Object.entries(matrix).map(([key, value]) => <div className={key} key={key}><span>{key.replace('_', ' ')}</span><strong>{String(value)}</strong></div>)}</div></section>
+      <section className="analytics-card"><span>LEARNING RESULTS</span><h2>Practice summary</h2>{enoughEvidence ? <div className="matrix-grid"><div className="true_positive"><span>correct attempts</span><strong>{data.confusion_matrix.true_positive}</strong></div><div className="false_negative"><span>needs review</span><strong>{data.confusion_matrix.false_negative + data.confusion_matrix.false_positive}</strong></div></div> : <p>Complete at least five scored activities before performance percentages are shown. You currently have {totalInteractions}.</p>}</section>
       <section className="analytics-card"><span>OBSERVED RECALL</span><h2>Retention Curve</h2>{data.retention_curve.length ? <div className="retention-chart">{data.retention_curve.map((value: number, index: number) => <div key={index}><i style={{ height: `${value}%` }} /><span>Period {index + 1}</span><b>{value}%</b></div>)}</div> : <p>Complete exercises and spaced reviews to calculate retention from stored results.</p>}</section>
-      <section className="analytics-card skill-card"><span>LEARNER MODERATORS</span><h2>Skill Performance</h2>{data.skill_scores.length ? data.skill_scores.map((item: any) => <div className="skill-row" key={item.skill}><span>{item.skill}</span><i><b style={{ width: `${item.score}%` }} /></i><strong>{item.score}%</strong></div>) : <p>Complete practice interactions to populate skill-level evidence.</p>}</section>
+      <section className="analytics-card skill-card"><span>SKILL PROGRESS</span><h2>Skill performance</h2>{enoughEvidence && data.skill_scores.length ? data.skill_scores.map((item: any) => <div className="skill-row" key={item.skill}><span>{item.skill}</span><i><b style={{ width: `${item.score}%` }} /></i><strong>{item.score}%</strong></div>) : <p>More scored practice is needed before a reliable skill breakdown is available.</p>}</section>
       <section className="analytics-card assessment-card"><span>PRE/POST ASSESSMENT</span><h2>Record comparable scores</h2>
         <p>Use the same teacher-approved assessment before and after a learning period.</p>
         {(['pre', 'post'] as const).map((phase) => <div key={phase}><label>{phase}-test score</label><input type="number" min="0" max="100" value={scores[phase]} onChange={(event) => setScores({ ...scores, [phase]: event.target.value })} placeholder={String(data.assessment[`${phase}_test_score`] ?? '0-100')} /><button onClick={() => saveScore(phase)}>Save</button></div>)}
@@ -471,7 +487,7 @@ function AnalyticsPage() {
         <button className="danger-button" onClick={removeAccount}>Delete account and records</button>
       </section>
       <section className="analytics-card privacy-card"><span>ACCOUNT SECURITY</span><h2>Active sessions</h2>
-        <p>{user?.email_verified ? 'Email verified' : 'Email verification pending'} · {sessions.filter((item) => item.active).length} active refresh session(s)</p>
+        <p>{user?.email_verified ? 'Account email status complete' : 'Email verification pending'} · {sessions.filter((item) => item.active).length} active refresh session(s)</p>
         {sessions.slice(0, 4).map((session) => <div className="session-row" key={session.id}><strong>{session.user_agent || 'Unknown browser'}</strong><small>{session.ip_address || 'Unknown IP'} · expires {new Date(session.expires_at).toLocaleDateString()}</small></div>)}
         <button onClick={async () => { await logoutAll(); logout(); navigate('/auth') }}>Sign out every device</button>
       </section>

@@ -235,6 +235,9 @@ footer { padding: 45px max(34px, calc((100vw - 1212px) / 2)); display: flex; jus
   .platform-world { grid-template-columns: 210px 1fr; padding: 16px; gap: 16px; }.side-rail { top: 16px; height: calc(100vh - 32px); }.platform-header { flex-direction: column; }.header-stats { justify-content: flex-start; }
   .metric-grid { grid-template-columns: 1fr 1fr; }.dashboard-grid, .practice-layout, .analytics-grid { grid-template-columns: 1fr; }.language-layout { grid-template-columns: 1fr; }.skill-card { grid-column: auto; }
 }
+.lesson-lock-note { color: #8b5d32 !important; font-weight: 700; font-size: 12px !important; margin: 10px 0 0 !important; }
+.lesson-grid button:disabled { cursor: not-allowed; opacity: .55; }
+
 @media (max-width: 760px) {
   .auth-world { padding: 18px; grid-template-columns: 1fr; }.auth-promise { padding: 34px 25px; }.auth-card { padding: 30px 22px; }.auth-grid { grid-template-columns: 1fr; }
   .platform-world { display: block; padding: 10px; }.side-rail { position: static; height: auto; padding: 15px; margin-bottom: 12px; }.rail-brand strong { font-size: 21px; }.side-rail nav { grid-template-columns: repeat(3,1fr); }.side-rail nav button { justify-content: center; padding: 11px 6px; font-size: 10px; }.side-rail nav button svg { display: none; }.rail-profile { display: none; }
